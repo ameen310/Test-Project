@@ -4,9 +4,10 @@ import sqlite3
 from sqlite3 import Connection
 
 # -----------------------
-# Database Utilities
+# Database Setup
 # -----------------------
-DB_PATH = "store.db"
+# POINT THIS TO YOUR EXISTING DATABASE FILE
+DB_PATH = "/mount/src/project-1/store.db"
 
 def get_conn() -> Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -14,6 +15,7 @@ def get_conn() -> Connection:
     return conn
 
 def init_db():
+    """Create tables only if they don't exist. Won't delete existing data."""
     with get_conn() as conn:
         c = conn.cursor()
         # Users table
@@ -140,6 +142,7 @@ def admin_ui():
     c2.metric("Orders", metrics["orders"], key="adm_orders")
     c3.metric("Revenue ($)", f"${metrics['revenue']:.2f}", key="adm_revenue")
     c4.metric("Products", metrics["products"], key="adm_products")
+
     if metrics["low_stock"]:
         st.subheader("Low Stock Products")
         for p in metrics["low_stock"]:
@@ -180,12 +183,12 @@ def admin_ui():
 # -----------------------
 def main():
     st.title("E-Commerce Store")
-    init_db()
+    init_db()  # creates tables only if missing
 
-    # Sidebar login
     if "user" not in st.session_state:
         st.session_state.user = None
 
+    # Sidebar login/register
     if not st.session_state.user:
         st.sidebar.subheader("Login")
         username = st.sidebar.text_input("Username", key="login_user")
@@ -213,7 +216,7 @@ def main():
             st.session_state.user = None
             st.experimental_rerun()
 
-        # Tabs for navigation
+        # Tabs
         tabs = st.tabs(["Dashboard","Products","Admin"])
         with tabs[0]:
             st.subheader("Dashboard")
