@@ -2,12 +2,12 @@
 import streamlit as st
 import sqlite3
 from sqlite3 import Connection
+import os
 
 # -----------------------
 # Database Setup
 # -----------------------
-# POINT THIS TO YOUR EXISTING DATABASE FILE
-DB_PATH = "/mount/src/project-1/store.db"
+DB_PATH = "/mnt/data/store.db"  # writable path for Streamlit Cloud
 
 def get_conn() -> Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -15,7 +15,7 @@ def get_conn() -> Connection:
     return conn
 
 def init_db():
-    """Create tables only if they don't exist. Won't delete existing data."""
+    """Create tables only if missing. Won't delete existing data."""
     with get_conn() as conn:
         c = conn.cursor()
         # Users table
