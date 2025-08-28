@@ -1,4 +1,4 @@
- # app.py
+# app.py
 import streamlit as st
 from math import ceil
 
@@ -12,387 +12,294 @@ from database import (
     admin_metrics
 )
 
-# ---------- Page & Style ----------
 st.set_page_config(page_title="Nike-Style Store", page_icon="👟", layout="wide")
 
-PRIMARY = "#111"          # Dark header
-ACCENT = "#ff3b30"        # Nike-ish red
-CARD_BG = "#ffffff"
-MUTED = "#6b7280"
-
-st.markdown(f"""
+# --- small CSS for nicer look ---
+st.markdown("""
 <style>
-/* Global */
-:root {{
-  --primary: {PRIMARY};
-  --accent: {ACCENT};
-}}
-.block-container {{
-  padding-top: 1.5rem;
-}}
-/* Headline */
-h1, h2, h3, h4 {{
-  letter-spacing: 0.2px;
-}}
-/* Card */
-.card {{
-  background: {CARD_BG};
-  border-radius: 16px;
-  padding: 14px;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-  border: 1px solid rgba(0,0,0,0.05);
-}}
-.btn {{
-  display:inline-block; padding: 8px 16px; border-radius: 999px; 
-  background: var(--accent); color: #fff; text-decoration:none; font-weight: 600;
-}}
-.btn-muted {{
-  background: #e5e7eb; color:#111;
-}}
-.badge {{
-  display:inline-block; padding: 4px 10px; border-radius:999px; 
-  background:#111; color:#fff; font-size:12px; font-weight:700;
-}}
-.price {{
-  font-weight: 800; font-size: 18px; color:#111;
-}}
-.rating {{
-  color: #f59e0b; font-weight:700;
-}}
-.muted {{
-  color: {MUTED};
-  font-size: 13px;
-}}
-.hr {{
-  margin: 12px 0; height:1px; background:#eee;
-}}
+.block-container { padding-top: 1rem; }
+.card { background: #fff; border-radius:12px; padding:12px; box-shadow:0 6px 18px rgba(0,0,0,0.06); margin-bottom:12px; }
+.product-img { border-radius:8px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Session ----------
-if "user" not in st.session_state:
-    st.session_state.user = None
-if "cart" not in st.session_state:
-    st.session_state.cart = []  # list of dicts: id, name, price, quantity
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "Shop"
+# --- session state defaults ---
+if "user" not in st.session_state: st.session_state.user = None
+if "cart" not in st.session_state: st.session_state.cart = []
+if "active_review_pid" not in st.session_state: st.session_state.active_review_pid = None
 
+# ---------- helpers ----------
 def logout():
     st.session_state.user = None
     st.session_state.cart = []
-    st.session_state.active_tab = "Shop"
-
-# ---------- Auth ----------
-def auth_ui():
-    st.title("👟 Welcome to the Nike-Style Store")
-    st.caption("Sign in to shop, review, wishlist, and track your orders.")
-
-    colL, colR = st.columns(2)
-    with colL:
-        st.subheader("Sign In")
-        lu = st.text_input("Username", key="login_user")
-        lp = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Login", use_container_width=True):
-            ok, user = authenticate(lu, lp)
-            if ok:
-                st.session_state.user = user
-                st.success(f"Welcome back, **{user['username']}**!")
-            else:
-                st.error("Invalid credentials.")
-
-    with colR:
-        st.subheader("Register")
-        ru = st.text_input("New Username", key="reg_user")
-        rp = st.text_input("New Password", type="password", key="reg_pass")
-        if st.button("Create Account", use_container_width=True):
-            ok, msg = register_user(ru, rp)
-            if ok:
-                st.success(msg + " You can now log in.")
-            else:
-                st.error(msg)
-
-# ---------- Utilities ----------
-def stars(r: float) -> str:
-    # show 5 star unicode based on average rating
-    filled = int(round(r))
-    return "⭐" * filled + "☆" * (5 - filled)
+    st.session_state.active_review_pid = None
 
 def add_to_cart(product_id: int, name: str, price: float, qty: int):
-    if qty < 1:
-        st.warning("Quantity must be at least 1.")
-        return
-    # merge items
+    # merge
     for it in st.session_state.cart:
         if it["id"] == product_id:
             it["quantity"] += qty
-            break
-    else:
-        st.session_state.cart.append({"id": product_id, "name": name, "price": price, "quantity": qty})
-    st.toast(f"Added {qty} × {name} to cart")
+            return
+    st.session_state.cart.append({"id": product_id, "name": name, "price": price, "quantity": qty})
 
-def render_product_card(p):
-    pid = p["id"]
-    st.image(p["image"], use_column_width=True)
-    st.markdown(f"<div class='price'>${p['price']:.2f}</div>", unsafe_allow_html=True)
-    st.markdown(f"**{p['name']}**")
-    if p["category"]:
-        st.markdown(f"<span class='badge'>{p['category']}</span>", unsafe_allow_html=True)
-    avg = p["avg_rating"] or 0
-    st.markdown(f"<div class='rating'>{stars(avg)} <span class='muted'>({int(p['review_count'])} reviews)</span></div>", unsafe_allow_html=True)
-    if p["description"]:
-        st.caption(p["description"])
-    st.caption(f"Stock: {p['stock']}")
+def stars(r: float) -> str:
+    filled = int(round(r))
+    return "★"*filled + "☆"*(5-filled)
 
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        qty = st.number_input("Qty", min_value=1, max_value=max(1, int(p["stock"])), value=1, key=f"qty_{pid}")
-    with c2:
-        if st.button("Add to Cart", key=f"add_{pid}", use_container_width=True):
-            add_to_cart(pid, p["name"], float(p["price"]), int(st.session_state[f"qty_{pid}"]))
-    with c3:
-        wish_col, review_col = st.columns(2)
-        with wish_col:
-            if st.button("♡ Wishlist", key=f"wish_{pid}", use_container_width=True):
-                ok, msg = add_wishlist(st.session_state.user["id"], pid)
-                st.toast(msg)
-        with review_col:
-            if st.button("✍️ Review", key=f"rev_{pid}", use_container_width=True):
-                st.session_state.active_tab = f"Review:{pid}"
+# ---------- Auth UI ----------
+def auth_ui():
+    st.title("👟 Nike-Style Store — Login / Register")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Login")
+        lu = st.text_input("Username", key="login_username")
+        lp = st.text_input("Password", type="password", key="login_password")
+        if st.button("Login", key="btn_login"):
+            ok, user = authenticate(lu, lp)
+            if ok:
+                st.session_state.user = user
+                st.success(f"Welcome back, {user['username']}!")
+            else:
+                st.error("Invalid username or password.")
+    with right:
+        st.subheader("Register")
+        ru = st.text_input("New username", key="reg_username")
+        rp = st.text_input("New password", type="password", key="reg_password")
+        if st.button("Create account", key="btn_register"):
+            ok, msg = register_user(ru, rp)
+            if ok:
+                st.success(msg + " Now please login.")
+            else:
+                st.error(msg)
 
-# ---------- Tabs ----------
+# ---------- Shop tab ----------
 def shop_tab():
     st.header("Shop")
-    # filters
-    cats = product_categories()
     min_p, max_p = product_min_max_price()
-    colA, colB, colC, colD = st.columns([2, 1, 2, 1])
-    with colA:
-        search = st.text_input("Search by name")
-    with colB:
-        category = st.selectbox("Category", cats)
-    with colC:
-        price_range = st.slider("Price range", float(min_p), float(max_p) if max_p>0 else 500.0, (float(min_p), float(max_p) if max_p>0 else 500.0))
-    with colD:
-        sort_by = st.selectbox("Sort by", ["newest", "price_asc", "price_desc", "rating_desc"])
+    c1, c2, c3, c4 = st.columns([3, 1, 2, 1])
+    with c1:
+        search = st.text_input("Search products", key="search_input")
+    with c2:
+        cats = product_categories()
+        cat = st.selectbox("Category", cats, key="category_select")
+    with c3:
+        price_range = st.slider("Price range", float(min_p), float(max_p) if max_p>0 else 500.0,
+                                (float(min_p), float(max_p) if max_p>0 else 500.0), key="price_slider")
+    with c4:
+        sort_by = st.selectbox("Sort", ["newest", "price_asc", "price_desc", "rating_desc"], key="sort_select")
 
-    # pagination
     page_size = 6
-    page = st.number_input("Page", min_value=1, value=1, step=1)
-
-    products, total = list_products(
-        search=search, category=category,
-        price_min=price_range[0], price_max=price_range[1],
-        sort_by=sort_by, page=int(page), page_size=page_size
-    )
+    page = st.number_input("Page", min_value=1, value=1, step=1, key="page_input")
+    products, total = list_products(search=search, category=cat, price_min=price_range[0],
+                                    price_max=price_range[1], sort_by=sort_by, page=page, page_size=page_size)
     total_pages = max(1, ceil(total / page_size))
-    st.caption(f"Showing page {int(page)} of {total_pages} — {total} items found")
+    st.caption(f"Showing page {page}/{total_pages} — {total} items")
 
     # grid
     for i in range(0, len(products), 3):
-        row = st.columns(3)
+        cols = st.columns(3)
         for j, p in enumerate(products[i:i+3]):
-            with row[j]:
-                with st.container():
-                    st.markdown("<div class='card'>", unsafe_allow_html=True)
-                    render_product_card(p)
-                    st.markdown("</div>", unsafe_allow_html=True)
+            with cols[j]:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.image(p["image"], use_column_width=True, output_format="auto")
+                st.markdown(f"**{p['name']}**")
+                st.markdown(f"**${p['price']:.2f}**")
+                if p["category"]:
+                    st.write(f"Category: {p['category']}")
+                st.write(stars(p["avg_rating"] or 0) + f"  ({int(p['review_count'] or 0)})")
+                st.caption(p["description"] or "")
+                qty_key = f"qty_{p['id']}"
+                st.number_input("Qty", min_value=1, max_value=max(1, int(p["stock"])), value=1, key=qty_key)
+                if st.button("Add to cart", key=f"addcart_{p['id']}"):
+                    qty = int(st.session_state[qty_key])
+                    add_to_cart(p["id"], p["name"], float(p["price"]), qty)
+                    st.success(f"Added {qty} × {p['name']} to cart.")
+                if st.button("Add to wishlist", key=f"wish_{p['id']}"):
+                    ok, msg = add_wishlist(st.session_state.user["id"], p["id"])
+                    st.success(msg) if ok else st.error(msg)
+                if st.button("Write review", key=f"revbtn_{p['id']}"):
+                    st.session_state.active_review_pid = p["id"]
+                st.markdown("</div>", unsafe_allow_html=True)
 
+# ---------- Wishlist ----------
 def wishlist_tab():
     st.header("Wishlist")
-    wl = get_wishlist(st.session_state.user["id"])
-    if not wl:
-        st.info("Your wishlist is empty.")
+    items = get_wishlist(st.session_state.user["id"])
+    if not items:
+        st.info("Wishlist is empty.")
         return
-    for i in range(0, len(wl), 3):
-        row = st.columns(3)
-        for j, p in enumerate(wl[i:i+3]):
-            with row[j]:
-                with st.container():
-                    st.markdown("<div class='card'>", unsafe_allow_html=True)
-                    st.image(p["image"], use_column_width=True)
-                    st.markdown(f"**{p['name']}**")
-                    st.markdown(f"<div class='price'>${p['price']:.2f}</div>", unsafe_allow_html=True)
-                    st.caption(p["category"] or "Uncategorized")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("Add to Cart", key=f"wl_add_{p['id']}", use_container_width=True):
-                            add_to_cart(p["id"], p["name"], float(p["price"]), 1)
-                    with c2:
-                        if st.button("Remove", key=f"wl_rm_{p['id']}", use_container_width=True):
-                            ok, msg = remove_wishlist(st.session_state.user["id"], p["id"])
-                            st.toast(msg)
-                    st.markdown("</div>", unsafe_allow_html=True)
+    for i in range(0, len(items), 3):
+        cols = st.columns(3)
+        for j, p in enumerate(items[i:i+3]):
+            with cols[j]:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.image(p["image"], use_column_width=True)
+                st.markdown(f"**{p['name']}**")
+                st.markdown(f"${p['price']:.2f}")
+                if st.button("Add to cart", key=f"wl_add_{p['id']}"):
+                    add_to_cart(p["id"], p["name"], float(p["price"]), 1)
+                    st.success("Added to cart")
+                if st.button("Remove", key=f"wl_rm_{p['id']}"):
+                    ok, msg = remove_wishlist(st.session_state.user["id"], p["id"])
+                    st.success(msg)
+                st.markdown("</div>", unsafe_allow_html=True)
 
-def reviews_flow(product_id: int):
+# ---------- Review flow ----------
+def review_tab():
+    pid = st.session_state.active_review_pid
     st.header("Write a Review")
-    rating = st.slider("Rating", 1, 5, 5)
-    comment = st.text_area("Comment (optional)")
-    if st.button("Save Review"):
-        ok, msg = add_review(st.session_state.user["id"], product_id, rating, comment)
-        if ok:
-            st.success(msg)
-            st.session_state.active_tab = "Shop"
-        else:
-            st.error(msg)
+    st.write(f"Product id: {pid}")
+    rating = st.slider("Rating", 1, 5, 5, key=f"rev_rating_{pid}")
+    comment = st.text_area("Comment", key=f"rev_comment_{pid}")
+    if st.button("Save review", key=f"save_rev_{pid}"):
+        ok, msg = add_review(st.session_state.user["id"], pid, rating, comment)
+        st.success(msg) if ok else st.error(msg)
+        st.session_state.active_review_pid = None
     st.divider()
     st.subheader("Recent Reviews")
-    for r in get_reviews(product_id):
+    for r in get_reviews(pid):
         st.markdown(f"**{r['username']}** — {stars(r['rating'])}")
         if r["comment"]:
             st.caption(r["comment"])
 
+# ---------- Cart & Checkout ----------
 def cart_tab():
-    st.header("Cart & Checkout")
+    st.header("Cart")
     if not st.session_state.cart:
-        st.info("Your cart is empty.")
+        st.info("Cart empty.")
         return
     total = 0.0
-    for idx, it in enumerate(list(st.session_state.cart)):
-        c1, c2, c3, c4 = st.columns([4, 2, 2, 1])
+    for idx, it in enumerate(st.session_state.cart):
+        c1, c2, c3, c4 = st.columns([3,1,1,1])
         with c1:
-            st.markdown(f"**{it['name']}**")
+            st.write(it["name"])
         with c2:
-            qty = st.number_input("Qty", min_value=1, value=int(it["quantity"]), key=f"cart_qty_{idx}")
+            qty_key = f"cart_qty_{idx}"
+            st.number_input("Qty", min_value=1, value=int(it["quantity"]), key=qty_key)
         with c3:
-            price_line = it["price"] * st.session_state[f"cart_qty_{idx}"]
-            st.markdown(f"${price_line:.2f}")
+            price_line = it["price"] * st.session_state[qty_key]
+            st.write(f"${price_line:.2f}")
         with c4:
-            if st.button("Remove", key=f"rm_{idx}"):
+            if st.button("Remove", key=f"cart_rm_{idx}"):
                 st.session_state.cart.pop(idx)
-                st.experimental_set_query_params()  # UI refresh hint
-                st.rerun()
-        it["quantity"] = int(st.session_state[f"cart_qty_{idx}"])
+                st.experimental_rerun()
+        it["quantity"] = int(st.session_state[qty_key])
         total += it["price"] * it["quantity"]
-    st.divider()
     st.subheader(f"Total: ${total:.2f}")
-    colL, colR = st.columns(2)
-    with colL:
-        if st.button("Clear Cart", use_container_width=True):
+    if st.button("Clear cart", key="clear_cart"):
+        st.session_state.cart = []
+        st.success("Cart cleared.")
+    if st.button("Checkout", key="checkout_btn"):
+        ok, msg, order_id = place_order(st.session_state.user["id"], st.session_state.cart)
+        if ok:
+            st.success(f"{msg} (Order #{order_id})")
+            st.balloons()
             st.session_state.cart = []
-            st.success("Cart cleared.")
-    with colR:
-        if st.button("Checkout", use_container_width=True):
-            ok, msg, order_id = place_order(st.session_state.user["id"], st.session_state.cart)
-            if ok:
-                st.success(f"{msg} (Order #{order_id})")
-                st.balloons()
-                st.session_state.cart = []
-            else:
-                st.error(msg)
+        else:
+            st.error(msg)
 
+# ---------- Orders ----------
 def orders_tab():
-    st.header("Orders")
+    st.header("Your Orders")
     orders = list_orders(st.session_state.user["id"])
     if not orders:
         st.info("No orders yet.")
         return
     for o in orders:
-        with st.expander(f"Order #{o['id']} — {o['created_at']} — Total ${o['total']:.2f}"):
-            items = order_items(o["id"])
-            for it in items:
-                c1, c2, c3 = st.columns([1, 4, 2])
+        with st.expander(f"Order #{o['id']} — {o['created_at']} — ${o['total']:.2f}"):
+            for it in order_items(o["id"]):
+                c1, c2 = st.columns([1,3])
                 with c1:
-                    st.image(it["image"], use_column_width=True)
+                    st.image(it["image"], width=80)
                 with c2:
-                    st.markdown(f"**{it['name']}**")
-                    st.caption(f"Qty: {it['quantity']}")
-                with c3:
-                    st.markdown(f"${it['price_each']*it['quantity']:.2f}")
+                    st.write(f"**{it['name']}**")
+                    st.caption(f"Qty: {it['quantity']} — ${it['price_each']:.2f} each")
 
+# ---------- Profile ----------
 def profile_tab():
     st.header("Profile")
-    st.caption(f"Logged in as **{st.session_state.user['username']}**")
-    st.subheader("Change Password")
-    old = st.text_input("Old Password", type="password")
-    new = st.text_input("New Password", type="password")
-    if st.button("Update Password"):
+    st.write(f"Username: **{st.session_state.user['username']}**")
+    st.subheader("Change password")
+    old = st.text_input("Old password", type="password", key="chg_old")
+    new = st.text_input("New password", type="password", key="chg_new")
+    if st.button("Change password", key="chg_btn"):
         ok, msg = change_password(st.session_state.user["id"], old, new)
         st.success(msg) if ok else st.error(msg)
-    st.divider()
-    if st.button("Logout", type="secondary"):
+    if st.button("Logout", key="logout_profile"):
         logout()
-        st.success("Logged out.")
+        st.experimental_rerun()
 
+# ---------- Admin ----------
 def admin_tab():
     if not st.session_state.user.get("is_admin"):
-        st.warning("Admin only.")
+        st.warning("Admin only")
         return
     st.header("Admin Dashboard")
-
     m = admin_metrics()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Users", m["users"])
-    c2.metric("Orders", m["orders"])
-    c3.metric("Revenue ($)", float(m["revenue"]))
-    c4.metric("Products", m["products"])
+    st.metric("Users", m["users"], delta=None, key="adm_users")
+    st.metric("Orders", m["orders"], key="adm_orders")
+    st.metric("Revenue ($)", float(m["revenue"]), key="adm_revenue")
+    st.metric("Products", m["products"], key="adm_products")
     if m["low_stock"]:
-        st.subheader("🔻 Low Stock")
-        for row in m["low_stock"]:
-            st.write(f"{row['name']}: {row['stock']} left")
-
+        st.subheader("Low stock")
+        for r in m["low_stock"]:
+            st.write(f"{r['name']}: {r['stock']}")
     st.divider()
-    st.subheader("Add / Update / Delete Product")
-
-    # Create / Update form
-    mode = st.radio("Mode", ["Add", "Update", "Delete"], horizontal=True)
+    st.subheader("Manage Products")
+    mode = st.selectbox("Mode", ["Add", "Update", "Delete"], key="admin_mode")
+    products_all, _ = list_products(page=1, page_size=9999)
     if mode in ("Update", "Delete"):
-        # quick picker
-        page = 1
-        rows, total = list_products(page=page, page_size=9999)
-        options = {f"#{r['id']} — {r['name']}": r for r in rows}
-        chosen = st.selectbox("Select Product", list(options.keys()))
-        current = options[chosen]
+        opts = {f"#{p['id']} {p['name']}": p for p in products_all}
+        sel = st.selectbox("Select product", list(opts.keys()), key="admin_select")
+        current = opts[sel]
     else:
         current = None
-
-    with st.form("product_form", clear_on_submit=(mode=="Add")):
-        name = st.text_input("Name", value=current["name"] if current else "")
-        price = st.number_input("Price", min_value=0.0, value=float(current["price"]) if current else 100.0)
-        image = st.text_input("Image URL", value=current["image"] if current else "")
-        category = st.text_input("Category", value=current["category"] if current else "Casual")
-        desc = st.text_area("Description", value=current["description"] if current else "")
-        stock = st.number_input("Stock", min_value=0, value=int(current["stock"]) if current else 10)
-        submitted = st.form_submit_button(mode)
-
-    if mode == "Add" and submitted:
-        ok, msg = add_product(name, price, image, category, desc, stock)
-        st.success(msg) if ok else st.error(msg)
-    elif mode == "Update" and submitted:
-        ok, msg = update_product(current["id"], name, price, image, category, desc, stock)
-        st.success(msg) if ok else st.error(msg)
-    elif mode == "Delete" and submitted:
-        ok, msg = delete_product(current["id"])
-        st.success(msg) if ok else st.error(msg)
+    name = st.text_input("Name", value=current["name"] if current else "", key="admin_name")
+    price = st.number_input("Price", value=float(current["price"]) if current else 100.0, key="admin_price")
+    image = st.text_input("Image URL", value=current["image"] if current else "", key="admin_image")
+    category = st.text_input("Category", value=current["category"] if current else "Casual", key="admin_cat")
+    desc = st.text_area("Description", value=current["description"] if current else "", key="admin_desc")
+    stock = st.number_input("Stock", min_value=0, value=int(current["stock"]) if current else 10, key="admin_stock")
+    if st.button("Submit", key="admin_submit"):
+        if mode == "Add":
+            ok, msg = add_product(name, price, image, category, desc, stock)
+            st.success(msg) if ok else st.error(msg)
+        elif mode == "Update":
+            ok, msg = update_product(current["id"], name, price, image, category, desc, stock)
+            st.success(msg) if ok else st.error(msg)
+        elif mode == "Delete":
+            ok, msg = delete_product(current["id"])
+            st.success(msg) if ok else st.error(msg)
 
 # ---------- Router ----------
 def router():
-    # Special sub-route for writing a review
-    if isinstance(st.session_state.active_tab, str) and st.session_state.active_tab.startswith("Review:"):
-        pid = int(st.session_state.active_tab.split(":")[1])
-        reviews_flow(pid)
+    if st.session_state.active_review_pid:
+        review_tab()
         return
-
     tabs = st.tabs(["Shop", "Cart", "Orders", "Wishlist", "Profile"] + (["Admin"] if st.session_state.user.get("is_admin") else []))
-    with tabs[0]: shop_tab()
-    with tabs[1]: cart_tab()
-    with tabs[2]: orders_tab()
-    with tabs[3]: wishlist_tab()
-    with tabs[4]: profile_tab()
+    with tabs[0]:
+        shop_tab()
+    with tabs[1]:
+        cart_tab()
+    with tabs[2]:
+        orders_tab()
+    with tabs[3]:
+        wishlist_tab()
+    with tabs[4]:
+        profile_tab()
     if st.session_state.user.get("is_admin"):
-        with tabs[5]: admin_tab()
+        with tabs[5]:
+            admin_tab()
 
 # ---------- Entry ----------
 if st.session_state.user is None:
     auth_ui()
 else:
-    top = st.container()
-    with top:
-        left, right = st.columns([4,1])
-        with left:
-            st.title(f"Hey, {st.session_state.user['username']} 👋")
-            st.caption("Browse, wishlist, review, and shop your favorite kicks.")
-        with right:
-            if st.button("Logout"):
-                logout()
-                st.stop()
+    topL, topR = st.columns([4,1])
+    with topL:
+        st.title(f"Hello, {st.session_state.user['username']} 👋")
+    with topR:
+        if st.button("Logout", key="logout_top"):
+            logout()
+            st.experimental_rerun()
     router()
